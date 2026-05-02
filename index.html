@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
-<title>MONEY HEIST v10 · XAU/USD HFT</title>
+<title>MONEY HEIST v10 · HGEv5 INTEGRATED · XAU/USD HFT</title>
 
 <!-- PWA Meta Tags -->
 <meta name="application-name" content="Money Heist v10"/>
@@ -46,7 +46,7 @@ if('serviceWorker' in navigator){
 <div id="boot">
   <div id="boot-logo">&#x1F4B0;</div>
   <div id="boot-title">MONEY HEIST v10</div>
-  <div id="boot-sub">XAU/USD &middot; LIVE TRADING &middot; ULTRA-GOD MODE</div>
+  <div id="boot-sub">XAU/USD &middot; HGEv5 KILL TIERS &middot; $15–$80/TRADE</div>
   <div id="boot-bar-wrap"><div id="boot-bar"></div></div>
   <div id="boot-msg" id="boot-msg">Loading...</div>
 </div>
@@ -201,100 +201,131 @@ const EXNESS_LEVERAGE              = 2000; // 1:2000
 const EXNESS_MARGIN_SAFETY         = 0.40; // never use >40% of free equity as margin
 
 // ── SESSION VOLATILITY MULTIPLIERS FOR SL (XAU-specific) ──────────
+// Wider multipliers = more breathing room. XAU moves $3–$8 on session opens.
+// These scale the already-generous structure SL — not an ATR override.
 function getSessionSLMult(hourGMT){
-  if(hourGMT>=13 &&hourGMT<17 )return 1.35; // London/NY overlap (was 2.0, most volatile but not extreme)
-  if(hourGMT>=8  &&hourGMT<10 )return 1.20; // London open spike (was 1.8)
-  if(hourGMT>=13 &&hourGMT<15 )return 1.20; // NY open (was 1.6)
-  if(hourGMT>=0  &&hourGMT<8  )return 0.85; // Asian — quiet
-  return 1.0;
+  if(hourGMT>=13  && hourGMT<17 ) return 1.50; // London/NY overlap — widest, most traps
+  if(hourGMT>=8   && hourGMT<10 ) return 1.35; // London open — fast expansion spikes
+  if(hourGMT>=13  && hourGMT<15 ) return 1.35; // NY open flush — second-most volatile
+  if(hourGMT>=10  && hourGMT<13 ) return 1.20; // Mid London — moderate volatility
+  if(hourGMT>=17  && hourGMT<20 ) return 1.10; // Post-NY — fading activity
+  if(hourGMT>=0   && hourGMT<8  ) return 0.90; // Asian — quiet, tight structure fine
+  return 1.10; // default
 }
 
 // ── SWING STRUCTURE FINDER — finds last significant swing for SL ───
-// Returns the price of the last swing low (BUY) or swing high (SELL)
-// that represents real market structure, not just noise
+// Looks back up to 50 candles for a confirmed swing with both neighbours
+// on BOTH sides (not just 1 — eliminates shallow micro-wicks).
+// For BUY: finds the most recent swing LOW below price.
+// For SELL: finds the most recent swing HIGH above price.
 function findStructureSL(cs, dir, atr){
   if(!cs||cs.length<10)return null;
-  const lookback=Math.min(cs.length-1, 30); // look back up to 30 candles
+  const lookback=Math.min(cs.length-1, 50); // wider lookback → stronger structure
   const slice=cs.slice(-lookback);
+  const current=slice[slice.length-1].close;
 
   if(dir==="BUY"){
-    // Find the lowest swing low — a candle whose low is lower than both neighbours
-    let swingLow=Infinity;
-    for(let i=1;i<slice.length-1;i++){
+    // Walk backward from recent, find the MOST RECENT qualified swing low
+    // Qualification: low confirmed by 2 candles on each side (not just 1)
+    for(let i=slice.length-3; i>=2; i--){
       const c=slice[i];
-      if(c.low<slice[i-1].low&&c.low<slice[i+1].low){
-        // Valid swing low — but must be below current price (meaningful)
-        if(c.low<slice[slice.length-1].close){
-          swingLow=Math.min(swingLow,c.low);
-        }
+      // Strict 2-bar confirmation each side
+      if(c.low < slice[i-1].low && c.low < slice[i+1].low &&
+         c.low < slice[i-2].low && c.low < slice[i+2].low &&
+         c.low < current){
+        return c.low;
       }
     }
-    // Fallback: use the lowest low of last 10 candles
-    if(swingLow===Infinity){
-      swingLow=Math.min(...slice.slice(-10).map(c=>c.low));
+    // Fallback 1: 1-bar swing with ATR distance filter (must be ≥ 0.5×ATR from price)
+    for(let i=slice.length-2; i>=1; i--){
+      const c=slice[i];
+      if(c.low < slice[i-1].low && c.low < slice[i+1].low &&
+         c.low < current && (current - c.low) >= atr*0.5){
+        return c.low;
+      }
     }
-    return swingLow;
+    // Fallback 2: lowest low in last 20 candles (always gives a number)
+    return Math.min(...slice.slice(-20).map(c=>c.low));
+
   }else{
-    // Find the highest swing high
-    let swingHigh=-Infinity;
-    for(let i=1;i<slice.length-1;i++){
+    // SELL: most recent qualified swing high above current price
+    for(let i=slice.length-3; i>=2; i--){
       const c=slice[i];
-      if(c.high>slice[i-1].high&&c.high>slice[i+1].high){
-        if(c.high>slice[slice.length-1].close){
-          swingHigh=Math.max(swingHigh,c.high);
-        }
+      if(c.high > slice[i-1].high && c.high > slice[i+1].high &&
+         c.high > slice[i-2].high && c.high > slice[i+2].high &&
+         c.high > current){
+        return c.high;
       }
     }
-    if(swingHigh===-Infinity){
-      swingHigh=Math.max(...slice.slice(-10).map(c=>c.high));
+    for(let i=slice.length-2; i>=1; i--){
+      const c=slice[i];
+      if(c.high > slice[i-1].high && c.high > slice[i+1].high &&
+         c.high > current && (c.high - current) >= atr*0.5){
+        return c.high;
+      }
     }
-    return swingHigh;
+    return Math.max(...slice.slice(-20).map(c=>c.high));
   }
 }
 
 // ══════════════════════════════════════════════════════════════════
 //  MASTER HFT SL CALCULATOR — EXNESS ZERO / XAUUSD / 1:2000
-//  Layer 1: Real market structure (swing low/high)
-//  Layer 2: Liquidity sweep buffer (0.3× ATR beyond structure)
-//  Layer 3: Spread buffer (2× spread — zero on Exness Zero, spikes on news)
+//  Layer 1: Real market structure (2-bar confirmed swing low/high)
+//  Layer 2: Liquidity sweep buffer  — 0.55×ATR beyond structure
+//           (wicks hunt stops below/above structure; we must clear them)
+//  Layer 3: Spread buffer           — 3.0× spread (news spike proof)
 //  Layer 4: Session volatility multiplier
-//  Layer 5: Hard minimum floor $1.50 (3× Exness Zero max spread spike)
-//  Layer 6: Hard maximum cap (never risk more than 15% of balance)
+//  Layer 5: ATR minimum cover       — 1.5×ATR  (noise floor for XAU)
+//  Layer 6: Hard dollar floor       — $3.00    (never closer than $3)
+//  Layer 7: Hard max cap            — 15% of balance at minimum lot
+//
+//  Target SL range in normal conditions:   $3.50 – $7.00
+//  Asian quiet session:                    $3.00 – $4.50
+//  London/NY open:                         $5.00 – $8.00+
 // ══════════════════════════════════════════════════════════════════
 function calcHFTSL({cs, dir, entry, atr, spread, hourGMT, balance, inst="XAUUSD"}){
-  // XAU/USD only
   const Layer1=findStructureSL(cs, dir, atr);
-  const sweepBuffer=atr*0.30;
-  const spreadBuffer=spread*2.0;
+
+  // Layer 2: sweep buffer — wicks routinely pierce structure by 0.4–0.6×ATR on XAU
+  const sweepBuffer=atr*0.55;
+  // Layer 3: spread buffer — 3× spread so even a $0.80 news spike doesn't clip us
+  const spreadBuffer=spread*3.0;
 
   let rawSL;
   if(Layer1!==null){
     if(dir==="BUY"){
+      // SL = below the confirmed swing low, clearing sweep wicks + spread
       rawSL=Math.abs(entry-(Layer1-sweepBuffer-spreadBuffer));
     }else{
       rawSL=Math.abs((Layer1+sweepBuffer+spreadBuffer)-entry);
     }
   }else{
-    rawSL=1.2*atr+spreadBuffer;
+    // No qualified structure found — use 1.8×ATR as fallback (wide enough for XAU noise)
+    rawSL=1.8*atr+spreadBuffer;
   }
 
+  // Layer 4: scale by session volatility
   const sessMult=getSessionSLMult(hourGMT||0);
   rawSL=rawSL*sessMult;
 
-  const minATRCover=atr*1.0;
-  rawSL=Math.max(rawSL, minATRCover);
+  // Layer 5: minimum 1.5×ATR — price must have room to breathe through normal candle noise
+  rawSL=Math.max(rawSL, atr*1.5);
 
-  // Layer 5: Hard minimum floor — $1.50 for Exness Zero XAUUSD
-  // Rationale: Exness Zero spread spikes to $0.30-$0.50 during news;
-  // $1.50 floor ensures SL sits beyond 3× max spike, not inside it.
-  rawSL=Math.max(rawSL, 1.50); // was 0.80
+  // Layer 6: hard dollar floor — $3.00 minimum regardless of ATR or structure
+  // Rationale: XAU/USD on Exness Zero routinely spikes $1.50–$2.50 on news;
+  // anything below $3.00 is almost guaranteed to stop out on normal volatility.
+  rawSL=Math.max(rawSL, 3.00);
 
+  // Layer 7: hard max — never risk more than 15% of START balance at minimum lot
   const pip=10;
-  // Layer 6: Hard max — never risk more than 15% of START balance per trade (absolute cap)
-  // Uses balance param which is overridden with real balance at entry call site
-  const maxRiskPerTrade=balance*0.15; // was 0.10 — absolute ceiling anchored to start balance
+  const maxRiskPerTrade=Math.max(balance,10)*0.15;
   const maxSLAtMinLot=maxRiskPerTrade/(MIN_LOT*pip);
-  rawSL=Math.min(rawSL, maxSLAtMinLot);
+  rawSL=Math.min(rawSL, Math.max(maxSLAtMinLot, 3.00)); // never crush below floor
+
+  // Soft practical cap: $12.00 for XAU/USD — beyond this the trade is too structurally
+  // loose and the lot size becomes negligible. Session mult already accounts for volatility;
+  // this prevents double-stacking on extreme structure+session combos.
+  rawSL=Math.min(rawSL, 12.00);
 
   const slPrice=dir==="BUY"
     ?+(entry-rawSL).toFixed(2)
@@ -304,141 +335,256 @@ function calcHFTSL({cs, dir, entry, atr, spread, hourGMT, balance, inst="XAUUSD"
 }
 
 // ══════════════════════════════════════════════════════════════════
-//  INSTRUMENT-AWARE LOT SIZING — EXNESS ZERO ACCOUNT
-//  Broker : Exness Zero | Instrument : XAU/USD | Leverage : 1:2000
-//  Commission : ~$9 round-trip per full lot (open + close)
-//  Contract  : 100 troy oz | Pip value : $10/pip/lot | Min lot : 0.01
+//  HGEv5 INTEGRATED LOT SIZING — EXNESS ZERO / XAU/USD / 1:2000
+//  ─────────────────────────────────────────────────────────────────
+//  MERGED: Money Heist v10 calcHFTLots + HGEv5 Hybrid Growth Engine
 //
-//  PHASE-BASED RISK MODEL (replaces flat vote tiers):
-//   Phase 1 — Build    (balance < 2× startBal)  : risk 4–6%
-//   Phase 2 — Compound (balance 2×–6× startBal) : risk 5–8%
-//   Phase 3 — Secure   (balance ≥ 6× startBal)  : risk 2–3%
+//  TARGET RANGE: $15–$80 per trade (upgraded from $2.50–$3.00)
+//  ─────────────────────────────────────────────────────────────────
+//  HGEv5 KILL MODE TIERS (new):
+//   BASE     → standard risk  ($15–$20 base range)
+//   KILL     → 2.5× risk      (session + TRENDING confirmed)
+//   KILL_MAX → 3.5× risk      (dayPnL >35% + winStreak ≥2 + TRENDING)
 //
-//  Additional layers:
-//   • Commission guard  — TP must clear round-trip cost before it's valid
-//   • Margin guard      — open margin never exceeds 40% of free equity
-//   • Absolute max cap  — never risk more than 15% of SESSION START balance
-//   • Hot streak mult   — 3+ consecutive wins → lots × 1.20 (momentum)
-//   • Recovery mode     — 3+ consecutive losses → require high-conviction only
-//   • HMR windows       — 50% lot reduction during Exness high-margin periods
+//  HGEv5 PRECISION GATES (new — run BEFORE lot sizing):
+//   • Pullback zone filter:  price must be in 35–55% of recentHigh/Low range
+//   • Candle range gate:     lastCandleRange > 1.5×ATR → skip (blown candle)
+//   • Rejection confirm:     BUY price > prevClose / SELL price < prevClose
+//   • Daily lock-in:         dayPnL > 100% → stop_for_day (profit protect)
 //
-//  Hard limits: min 0.01, max 5.0 lots
+//  EQUITY GUARD (HGEv5):
+//   • Peak DD > 20% → HALT_TRADING (hard kill)
+//   • Peak DD > 10% → risk × 0.50 (REDUCE)
+//
+//  Combined multiplier stack (highest priority first):
+//   riskDollars = BASE($15–$20)
+//     × killModeMult  (1.0 / 2.5 / 3.5)
+//     × marketMult    (1.30 TRENDING / 0.55 RANGING / 1.0 NORMAL)
+//     × equityGuard   (1.0 / 0.5 REDUCE)
+//     × sessionBoost  (1.35 London / 1.65 NY / 0.80 Asia)
+//     × ultraSignal   (1.60 ≥80% strength / 1.30 ≥65%)
+//     × hotStreak     (1.10 if ≥3 consecutive wins)
+//     × drawdownPenalty (0.50 danger / 0.75 caution)
+//     × HMR           (0.50 Exness leverage window)
+//   Hard cap: $80/trade absolute max
+//   Hard min: $10/trade (never below this)
 // ══════════════════════════════════════════════════════════════════
-function calcHFTLots({balance, dayStartBal, strength, slD, score, inst="XAUUSD",
-                      startBalance, streak, livePrice, hourGMT}){
-  const pip=10; // $10 per pip per 1.0 lot on XAU/USD
 
-  // ── DRAWDOWN ZONES (widened for Exness Zero breathing room) ───────
+// ── HGEv5 KILL MODE STATE (module-level, reset on new day) ─────────
+let _hgeKillMode   = "BASE";     // "BASE" | "KILL" | "KILL_MAX"
+let _hgeDayPnL     = 0;          // day's P&L fraction vs dayStart
+let _hgeWinStreak  = 0;          // consecutive wins
+let _hgePeakBal    = 0;          // rolling equity peak for guard
+let _hgeLastReset  = 0;          // UTC date of last day-reset
+
+// ── HGEv5 PRECISION GATE ───────────────────────────────────────────
+// Returns {allow:bool, reason:string}
+// Called BEFORE masterSignal's final decision in processCandle.
+function hgePrecisionGate({cs, dir, entry, atr, mktState}){
+  if(!cs||cs.length<3) return {allow:true};
+
+  // Gate 1: Blown candle filter (HGEv5)
+  const last=cs[cs.length-1];
+  const prevArr=cs.slice(-8,-1);
+  const avgRange=prevArr.reduce((s,c)=>s+c.range,0)/Math.max(prevArr.length,1);
+  if(avgRange>0 && last.range>avgRange*1.5) return {allow:false, reason:"blown_candle"};
+
+  // Gate 2: Pullback zone filter (HGEv5) — only in TRENDING markets
+  if(mktState==="TRENDING"){
+    const window=cs.slice(-20);
+    const recHigh=Math.max(...window.map(c=>c.high));
+    const recLow =Math.min(...window.map(c=>c.low));
+    const range=recHigh-recLow;
+    if(range>atr*0.5){
+      const pos=(entry-recLow)/range;
+      if(pos<0.30 || pos>0.70) return {allow:false, reason:"outside_zone"};
+    }
+  }
+
+  // Gate 3: Rejection confirmation (HGEv5)
+  const prevClose=cs[cs.length-2]?.close;
+  if(prevClose){
+    if(dir==="BUY"  && entry<=prevClose) return {allow:false, reason:"no_bull_rejection"};
+    if(dir==="SELL" && entry>=prevClose) return {allow:false, reason:"no_bear_rejection"};
+  }
+
+  return {allow:true};
+}
+
+// ── HGEv5 KILL MODE UPDATER — call on every candle close ───────────
+function hgeUpdateKillMode({balance, dayStartBal, lastTrades, hour, mktState}){
+  // Day reset
+  const todayUTC=new Date().getUTCDate();
+  if(_hgeLastReset!==todayUTC){
+    _hgeLastReset=todayUTC;
+    _hgeDayPnL=0;
+    _hgeKillMode="BASE";
+    _hgeWinStreak=0;
+  }
+
+  _hgeDayPnL=(balance-dayStartBal)/Math.max(dayStartBal,0.01);
+  _hgePeakBal=Math.max(_hgePeakBal||balance, balance);
+
+  // Win streak from lastTrades array (pnl values)
+  const recent=lastTrades.slice(-3);
+  _hgeWinStreak=0;
+  for(let i=recent.length-1;i>=0;i--){
+    if((recent[i]?.pnl??recent[i])>0) _hgeWinStreak++;
+    else break;
+  }
+
+  const inSession=(hour>=8&&hour<12)||(hour>=13&&hour<17);
+  if(mktState==="TRENDING"&&inSession){
+    if(_hgeDayPnL>0.35&&_hgeWinStreak>=2) _hgeKillMode="KILL_MAX";
+    else if(_hgeDayPnL>0.15)              _hgeKillMode="KILL";
+    else                                   _hgeKillMode="BASE";
+  }else{
+    _hgeKillMode="BASE";
+  }
+  return _hgeKillMode;
+}
+
+// ── INTEGRATED calcHFTLots — HGEv5 risk engine ─────────────────────
+function calcHFTLots({balance, dayStartBal, strength, slD, score, inst="XAUUSD",
+                      startBalance, streak, livePrice, hourGMT, seteRegime, mktState}){
+  const pip=10; // $10/pip/lot on XAU/USD
+
+  // ── DRAWDOWN ZONES (HTML original) ───────────────────────────────
   const drawdownPct=(dayStartBal-balance)/Math.max(dayStartBal,0.01);
-  const inCaution = drawdownPct>=CAUTION_PCT && drawdownPct<DAILY_STOP_PCT; // 8–20%
-  const inDanger  = drawdownPct>=DAILY_STOP_PCT*0.80; // ≥16% — danger threshold
+  const inCaution = drawdownPct>=CAUTION_PCT && drawdownPct<DAILY_STOP_PCT;
+  const inDanger  = drawdownPct>=DAILY_STOP_PCT*0.80;
 
   // ── VOTE COUNT ────────────────────────────────────────────────────
   const votes=score||Math.round((strength/100)*MAX_SCORE);
 
-  // ── PHASE DETECTION — based on progress toward profit target ──────
-  const sessionStart = startBalance || dayStartBal; // anchor to session start balance
+  // ── PHASE DETECTION ───────────────────────────────────────────────
+  const sessionStart = startBalance || dayStartBal;
   const growthRatio  = balance / Math.max(sessionStart, 0.01);
   let phase;
-  if(growthRatio < 2.0)       phase = 1; // Build    ($50 → $100)
-  else if(growthRatio < 6.0)  phase = 2; // Compound ($100 → $300+)
-  else                        phase = 3; // Secure   ($300+ — protect gains)
+  if(growthRatio < 2.0)       phase = 1;
+  else if(growthRatio < 6.0)  phase = 2;
+  else                        phase = 3;
 
-  // ── BASE RISK % BY VOTE TIER ──────────────────────────────────────
-  let riskPct;
-  if(phase===3){
-    // Secure phase — de-risk, let compounded gains coast home
-    riskPct = votes>=6 ? 0.030 : votes>=5 ? 0.025 : 0.020;
-  } else if(phase===2){
-    // Compound phase — this is where the $50→$550 math accelerates
-    riskPct = votes>=6 ? 0.080 : votes>=5 ? 0.070 : votes>=4 ? 0.060 : 0.050;
-  } else {
-    // Build phase — strong enough to compound, tight enough to survive
-    riskPct = votes>=6 ? 0.060 : votes>=5 ? 0.055 : votes>=4 ? 0.050 : 0.040;
-  }
-
-  // ── RECOVERY MODE — 3+ consecutive losses ─────────────────────────
-  // Require high-conviction only AND bump risk to recover faster.
-  // Fewer trades, better setups, larger position on those setups.
+  // ── STREAK STATE ──────────────────────────────────────────────────
   const streakDir  = streak?.dir || "";
   const streakCur  = streak?.cur || 0;
   const inRecovery = streakDir==="L" && streakCur>=3;
-  if(inRecovery){
-    // Only high-conviction signals trade during recovery (enforced at call site via minConf+2)
-    riskPct = Math.max(riskPct, 0.060); // floor at 6% — recover with purpose, not desperation
-  }
+  const hotStreak  = streakDir==="W" && streakCur>=3;
 
-  // ── HOT STREAK MULTIPLIER — 3+ consecutive wins ───────────────────
-  // Exploit momentum runs without permanently raising baseline risk.
-  // Resets immediately on any loss.
-  const hotStreak = streakDir==="W" && streakCur>=3;
-  if(hotStreak && !inRecovery){
-    riskPct = riskPct * 1.20; // +20% on momentum — capped by absolute max below
-  }
-
-  // ── ABSOLUTE MAX CAP — anchored to SESSION START balance ──────────
-  // Prevents over-leveraging on a compounded hot run.
-  // On $50 start: max $7.50/trade ever. On $10 stress test: max $1.50/trade.
-  const sessionStartBal = startBalance || dayStartBal;
-  const absoluteMaxRiskDollars = sessionStartBal * 0.15;
-
-  // ── CAPITAL ZONE ADJUSTMENTS ──────────────────────────────────────
-  if(inDanger)        riskPct = riskPct * 0.30; // 30% of normal — danger zone
-  else if(inCaution)  riskPct = riskPct * 0.55; // 55% of normal — caution zone
-
-  // ── EXNESS HMR BLACKOUT WINDOWS — reduce lots during high margin periods ──
-  // Per Exness docs: leverage caps to 1:1000 during these windows.
-  // We reduce lots 50% rather than halt — keep trading, reduce exposure.
+  // ── HMR DETECTION ─────────────────────────────────────────────────
   let hmrActive = false;
   if(hourGMT!=null){
-    const minUTC = (hourGMT % 1) * 60;
-    // 30 min before XAU daily break (23:30–00:00 GMT)
     if(hourGMT>=23.5 || hourGMT<0.1) hmrActive = true;
-    // 4 hours before Friday close (20:00–00:00 GMT Friday)
-    // Friday = day 5 in JS (0=Sun)
     const dayUTC = new Date().getUTCDay();
     if(dayUTC===5 && hourGMT>=20) hmrActive = true;
-    // 1 hour after Sunday open (00:00–01:00 GMT Sunday)
     if(dayUTC===0 && hourGMT<1.0) hmrActive = true;
   }
-  if(hmrActive) riskPct = riskPct * 0.50;
 
-  // ── RISK DOLLARS (pre-commission) ────────────────────────────────
-  let riskDollars = Math.min(balance * riskPct, absoluteMaxRiskDollars);
+  // ── HGEv5 EQUITY GUARD ────────────────────────────────────────────
+  const peak=Math.max(_hgePeakBal||balance, balance);
+  const peakDD=(peak-balance)/Math.max(peak,0.01);
+  // Hard kill handled upstream in processCandle — here we apply REDUCE
+  const equityGuardMult = peakDD>0.10 ? 0.50 : 1.0;
+
+  // ══════════════════════════════════════════════════════════════════
+  //  HGEv5 INTEGRATED RISK — TARGET $15–$80/trade
+  //  Base: $15 (conservative) → $20 (aggressive baseline)
+  // ══════════════════════════════════════════════════════════════════
+
+  // 1. Base risk anchored to balance-aware floor
+  //    Floor is $15 for accounts ≥$200, scaled for smaller accounts
+  const balanceTier = balance>=500  ? 1.0 :
+                      balance>=200  ? 0.90 :
+                      balance>=100  ? 0.75 :
+                      balance>=50   ? 0.50 : 0.30;
+  let riskDollars = 15.0 * balanceTier;
+
+  // 2. Market regime → push toward $20
+  const regime = seteRegime || mktState || "NORMAL";
+  if(regime==="TRENDING")        riskDollars = Math.min(riskDollars * 1.33, 20.0 * balanceTier);
+  else if(regime==="TRANSITION") riskDollars = Math.min(riskDollars * 1.17, 17.5 * balanceTier);
+  // RANGING/NORMAL: stay at base
+
+  // 3. Signal conviction (vote count)
+  if(votes>=8)       riskDollars = Math.min(riskDollars * 1.25, 20.0 * balanceTier);
+  else if(votes>=6)  riskDollars = Math.min(riskDollars * 1.10, 19.0 * balanceTier);
+  else if(votes<=3)  riskDollars = Math.max(riskDollars * 0.85, 12.0 * balanceTier);
+
+  // 4. Phase modifier
+  if(phase===3) riskDollars = Math.min(riskDollars, 15.0 * balanceTier); // Secure: cap at base
+
+  // 5. Hot streak: ride momentum
+  if(hotStreak && !inRecovery) riskDollars = Math.min(riskDollars * 1.10, 22.0 * balanceTier);
+
+  // 6. Recovery: floor, don't shrink below $12
+  if(inRecovery) riskDollars = Math.max(riskDollars, 12.0 * balanceTier);
+
+  // ── HGEv5 KILL MODE MULTIPLIER ────────────────────────────────────
+  const killMult = _hgeKillMode==="KILL_MAX" ? 3.5 :
+                   _hgeKillMode==="KILL"     ? 2.5 : 1.0;
+  riskDollars *= killMult;
+
+  // ── MARKET STATE MODIFIER (HGEv5) ─────────────────────────────────
+  if(regime==="TRENDING")  riskDollars *= 1.30;
+  if(regime==="RANGING")   riskDollars *= 0.55;
+
+  // ── HGEv5 EQUITY GUARD ────────────────────────────────────────────
+  riskDollars *= equityGuardMult;
+
+  // ── SESSION BOOST (HTML) ──────────────────────────────────────────
+  const sesBoost = hourGMT!=null ? getSessionBoost(hourGMT) : 1.0;
+  riskDollars *= sesBoost;
+
+  // ── SIGNAL STRENGTH ULTRA BOOST ──────────────────────────────────
+  const strNorm = (strength||50)/100;
+  if(strNorm>=0.80)      riskDollars *= 1.60;
+  else if(strNorm>=0.65) riskDollars *= 1.30;
+
+  // ── CAPITAL ZONE PENALTIES ────────────────────────────────────────
+  if(inDanger)       riskDollars *= 0.50;
+  else if(inCaution) riskDollars *= 0.75;
+
+  // ── HMR ───────────────────────────────────────────────────────────
+  if(hmrActive) riskDollars *= 0.50;
+
+  // ── ABSOLUTE CAPS ─────────────────────────────────────────────────
+  riskDollars = Math.min(riskDollars, 80.0);       // $80 hard max
+  riskDollars = Math.max(riskDollars, 10.0 * balanceTier); // $10 scaled min
+
+  // ── BALANCE SAFETY FLOOR (never risk >20% of balance) ────────────
+  const maxByBalance = balance * 0.20;
+  riskDollars = Math.min(riskDollars, maxByBalance);
 
   // ── COMMISSION AWARENESS ──────────────────────────────────────────
-  // On Exness Zero: ~$9 round-trip per full lot.
-  // Deduct estimated commission from risk budget so the bot never
-  // sizes into a trade where commission alone eats the expected profit.
-  // Minimum lot estimate first, then refine.
-  const estLots      = riskDollars / (Math.max(slD, 1.50) * pip);
+  const estLots       = riskDollars / (Math.max(slD, 3.00) * pip);
   const estCommission = Math.min(estLots, 5.0) * EXNESS_COMMISSION_PER_LOT_RT;
-  // Only deduct if commission is material (>5% of risk budget)
-  if(estCommission > riskDollars * 0.05){
-    riskDollars = Math.max(riskDollars - estCommission, balance * 0.01);
+  if(estCommission > riskDollars * 0.08){
+    riskDollars = riskDollars - Math.min(estCommission, riskDollars * 0.08);
   }
 
+  // Hard floor post-commission
+  riskDollars = Math.max(riskDollars, Math.min(10.0, balance * 0.05));
+
   // ── LOT CALCULATION ───────────────────────────────────────────────
-  // Lots = riskDollars / (slD × pip)
-  // slD floor raised to 1.50 in calcHFTSL — but guard here too
-  const effectiveSLD = Math.max(slD, 1.50);
+  const effectiveSLD = Math.max(slD, 3.00);
   const lotRaw = riskDollars / (effectiveSLD * pip);
 
-  // ── MARGIN SAFETY GUARD — never use >40% of equity as margin ─────
-  // At 1:2000, margin per lot = (goldPrice × 100) / 2000
-  // Approximate gold price if not passed in
-  const goldPrice = livePrice || 3300; // fallback to ~current gold price
-  const marginPerLot = (goldPrice * 100) / EXNESS_LEVERAGE; // ~$165/lot at $3300
+  // ── MARGIN SAFETY GUARD ───────────────────────────────────────────
+  const goldPrice = livePrice || 3300;
+  const marginPerLot = (goldPrice * 100) / EXNESS_LEVERAGE;
   const maxLotsFromMargin = (balance * EXNESS_MARGIN_SAFETY) / Math.max(marginPerLot, 1);
 
   const lots = +Math.min(
     Math.max(lotRaw, MIN_LOT),
-    5.0,
+    8.0,             // raised from 5.0 → supports KILL_MAX targets
     maxLotsFromMargin
-  ).toFixed(2);
+  ).toFixed(4);
+
+  const riskPct = riskDollars / Math.max(balance, 0.01);
 
   return{lots, riskDollars:+riskDollars.toFixed(2), riskPct,
-         phase, hotStreak, inRecovery, hmrActive};
+         phase, hotStreak, inRecovery, hmrActive,
+         killMode:_hgeKillMode, equityGuard:peakDD>0.10?"REDUCE":"NORMAL"};
 }
 
 // ── RISK TIERS (legacy — kept for compatibility) ───────────────────
@@ -539,34 +685,62 @@ function ultraLotMult(score, balance){
   return m;
 }
 
-// ── HYBRID GROWTH ENGINE (HGE) ──────────────────────────────────────
-// Extra validation layer: classifies market and decides whether to
-// open a trade. Does NOT replace masterSignal — runs AFTER it.
-// Returns {allow:bool, riskMult:number, pyramidOk:bool}
-function hgeFilter({atrNow, atrAvg, voteStrength, mktState, balance, equityPeak}){
+// ── HGEv5 INTEGRATED FILTER — replaces old hgeFilter ────────────────
+// Runs AFTER masterSignal, BEFORE lot sizing.
+// Adds: ATR regime check, equity guard, Kill mode update,
+//       + exposes killMode / equityGuard state for status display.
+// Returns {allow:bool, riskMult:number, pyramidOk:bool, regime, killMode}
+function hgeFilter({atrNow, atrAvg, voteStrength, mktState, balance, equityPeak,
+                    dayStartBal, lastTrades, hourGMT, cs, dir, entry, atr}){
+
+  // 1. ATR Regime (from original HTML)
   const regime=detectATRRegime(atrNow, atrAvg);
-  if(regime==="dead")return{allow:false,riskMult:0,pyramidOk:false,regime};
+  if(regime==="dead")return{allow:false,riskMult:0,pyramidOk:false,regime,killMode:"BASE"};
 
-  // Vote agreement gate: >60% of strategies must agree
-  if(voteStrength<0.50)return{allow:false,riskMult:0,pyramidOk:false,regime};
-  // Chop needs stronger consensus
-  if(mktState==="RANGING"&&voteStrength<0.75)return{allow:false,riskMult:0,pyramidOk:false,regime};
+  // 2. Vote agreement gate
+  if(voteStrength<0.50)return{allow:false,riskMult:0,pyramidOk:false,regime,killMode:"BASE"};
+  if(mktState==="RANGING"&&voteStrength<0.75)return{allow:false,riskMult:0,pyramidOk:false,regime,killMode:"BASE"};
 
-  // Equity curve scaling
-  const peak=Math.max(equityPeak||balance, balance);
+  // 3. HGEv5 Precision Gate (new — pullback zone, candle range, rejection confirm)
+  if(cs&&dir&&entry&&atr){
+    const gate=hgePrecisionGate({cs, dir, entry, atr, mktState});
+    if(!gate.allow){
+      return{allow:false,riskMult:0,pyramidOk:false,regime,killMode:_hgeKillMode,gateReason:gate.reason};
+    }
+  }
+
+  // 4. HGEv5 Equity Guard
+  const peak=Math.max(_hgePeakBal||equityPeak||balance, balance);
   const dd=(peak-balance)/Math.max(peak,0.01);
+  if(dd>0.20)return{allow:false,riskMult:0,pyramidOk:false,regime,killMode:_hgeKillMode,gateReason:"equity_guard_stop"};
+
+  // 5. Update Kill Mode tier (HGEv5)
+  const killMode=hgeUpdateKillMode({
+    balance, dayStartBal:dayStartBal||balance,
+    lastTrades:lastTrades||[], hour:hourGMT||12, mktState
+  });
+
+  // 6. HGEv5 Daily lock-in (100% day gain → stop)
+  const dayPnL=(balance-(dayStartBal||balance))/Math.max(dayStartBal||balance,0.01);
+  if(dayPnL>1.0)return{allow:false,riskMult:0,pyramidOk:false,regime,killMode,gateReason:"daily_lock"};
+
+  // 7. Composite risk multiplier
   let eqMult=1.0;
-  if(dd>0.05&&dd<=0.15)eqMult=0.60;
-  else if(balance>peak*1.0)eqMult=1.15;
+  if(dd>0.10)       eqMult=0.50;  // REDUCE
+  else if(dd<=0.02) eqMult=1.15;  // above peak equity
 
-  // Market state risk multiplier
   let stateMult=1.0;
-  if(regime==="expansion")stateMult=1.30;
-  if(mktState==="RANGING")stateMult=0.70;
+  if(regime==="expansion") stateMult=1.30;
+  if(mktState==="RANGING")  stateMult=0.70;
 
-  const riskMult=Math.min(eqMult*stateMult, 2.0);
-  const pyramidOk=regime==="expansion"&&mktState!=="RANGING";
-  return{allow:true,riskMult,pyramidOk,regime};
+  // Kill mode multiplier feeds into riskMult for the upstream composite calc
+  const killMult = killMode==="KILL_MAX"?1.60 : killMode==="KILL"?1.30 : 1.0;
+
+  const riskMult=Math.min(eqMult*stateMult*killMult, 3.5);
+  const pyramidOk=(regime==="expansion"&&mktState!=="RANGING") ||
+                  (killMode==="KILL_MAX");
+
+  return{allow:true,riskMult,pyramidOk,regime,killMode,equityGuard:dd>0.10?"REDUCE":"NORMAL"};
 }
 
 // Aggregate 1M candles into higher TF candles
@@ -2605,6 +2779,8 @@ function App(){
                 streak:rStreak.current,
                 livePrice:price,
                 hourGMT:hour,
+                seteRegime:addOnSig.seteRegime||null,
+                mktState:rMktState.current||"NORMAL",
               });
               const addTrade={
                 ...addOnSig,
@@ -2705,6 +2881,8 @@ function App(){
                 startBalance:rStartBal.current,strength:pyrSig.strength,
                 score:pyrSig.score,slD:pyrSL.slD,inst:rInstrument.current,
                 streak:rStreak.current,livePrice:price,hourGMT:hour,
+                seteRegime:pyrSig.seteRegime||null,
+                mktState:rMktState.current||"NORMAL",
               });
               const pyrLots=+Math.min(Math.max(+pyrRaw.toFixed(4),MIN_LOT),MAX_LOT_NORMAL).toFixed(4);
               const pyrTrade={
@@ -2840,10 +3018,23 @@ function App(){
         atrNow:atr, atrAvg:avgATR, voteStrength:voteMajority,
         mktState:rMktState.current, balance:rBalance.current,
         equityPeak:rEquityPeak.current,
+        // HGEv5 new args:
+        dayStartBal:rDayStart.current,
+        lastTrades:rLog.current.slice(0,5).map(l=>({pnl:l.pnl||0})),
+        hourGMT:hour,
+        cs:newC, dir:sig.dir, entry:sig.entry, atr:sig.atr,
       });
       if(!hge.allow){
         setPhase("SCANNING");
-        if(rTickN.current%5===0)setStatus(`⏸ HGE: ${hge.regime==="dead"?"ATR dead — waiting for volatility":"weak consensus"} · scanning`);
+        const gateMsg = hge.gateReason==="blown_candle"     ? "blown candle — waiting":
+                        hge.gateReason==="outside_zone"     ? "outside 35–55% pullback zone":
+                        hge.gateReason==="no_bull_rejection" ? "no BUY rejection confirm":
+                        hge.gateReason==="no_bear_rejection" ? "no SELL rejection confirm":
+                        hge.gateReason==="equity_guard_stop" ? "⛔ equity guard — 20% DD halt":
+                        hge.gateReason==="daily_lock"        ? "🔒 daily lock — 100% gain secured":
+                        hge.regime==="dead"                  ? "ATR dead — waiting for volatility":
+                        "weak consensus";
+        if(rTickN.current%5===0)setStatus(`⏸ HGE[${hge.killMode||"BASE"}]: ${gateMsg} · scanning`);
         if(rMode.current!=="forward")setCandles([...newC]);
         return;
       }
@@ -2866,6 +3057,8 @@ function App(){
         streak:rStreak.current,
         livePrice:price,
         hourGMT:hour,
+        seteRegime:sig.seteRegime||null,
+        mktState:rMktState.current||"NORMAL",
       });
 
       // Recovery mode: prefer higher-conviction signals but don't hard-block
@@ -2879,22 +3072,27 @@ function App(){
       // ── SESSION BOOST + ULTRA LOT SIZE + HGE MULT ─────────────────
       const sesBoost=getSessionBoost(hour);       // London/NY/Asia session multiplier
       const ultraMult=ultraLotMult(sig.score, rBalance.current); // high-conviction boost
-      const hgeMult=hge.riskMult;                 // equity curve + regime multiplier
-      // Composite multiplier: session × ultra × HGE, capped conservatively
-      const compositeMult=Math.min(sesBoost*ultraMult*hgeMult, 3.0);
+      const hgeMult=hge.riskMult;                 // HGEv5 kill-tier + regime multiplier
+      // HGEv5 composite cap: KILL_MAX can push to 3.5×, KILL to 2.5×
+      const killCapMult = hge.killMode==="KILL_MAX"?3.5 : hge.killMode==="KILL"?2.5 : 2.0;
+      const compositeMult=Math.min(sesBoost*ultraMult*hgeMult, killCapMult);
 
       // Only open 2 positions if strength is very high AND balance is healthy
-      const numPos=(sig.strength>=85&&dayDD<0.03&&rBalance.current>15)?2:1;
+      const numPos=(sig.strength>=85&&dayDD<0.03&&rBalance.current>50)?2:1;
       const lots=+Math.min(
         Math.max(+(rawLots*compositeMult/numPos).toFixed(4), MIN_LOT),
         MAX_LOT_NORMAL
       ).toFixed(4);
 
       // Use recalculated SL for the actual trade
+      // HGEv5: widen TP targets in Kill tiers to match higher risk budget
+      const rrTP1 = hge.killMode==="KILL_MAX"?2.0 : hge.killMode==="KILL"?1.8 : 1.5;
+      const rrTP2 = hge.killMode==="KILL_MAX"?4.0 : hge.killMode==="KILL"?3.5 : 3.0;
+      const rrTP3 = hge.killMode==="KILL_MAX"?8.0 : hge.killMode==="KILL"?7.0 : 6.0;
       const finalSig={...sig, sl:realSL.sl, slD:realSL.slD,
-        tp1:+(sig.dir==="BUY"?sig.entry+realSL.slD*1.5:sig.entry-realSL.slD*1.5).toFixed(2),
-        tp2:+(sig.dir==="BUY"?sig.entry+realSL.slD*3.0:sig.entry-realSL.slD*3.0).toFixed(2),
-        tp3:+(sig.dir==="BUY"?sig.entry+realSL.slD*6.0:sig.entry-realSL.slD*6.0).toFixed(2),
+        tp1:+(sig.dir==="BUY"?sig.entry+realSL.slD*rrTP1:sig.entry-realSL.slD*rrTP1).toFixed(2),
+        tp2:+(sig.dir==="BUY"?sig.entry+realSL.slD*rrTP2:sig.entry-realSL.slD*rrTP2).toFixed(2),
+        tp3:+(sig.dir==="BUY"?sig.entry+realSL.slD*rrTP3:sig.entry-realSL.slD*rrTP3).toFixed(2),
       };
 
       // Trade starts with structure-based SL. Trail activates when price reaches 50%
@@ -2908,6 +3106,7 @@ function App(){
       rTrade.current=t;
       rDayTrades.current+=numPos;setDayTrades(rDayTrades.current);setTrade(t);setPhase("IN_TRADE");
 
+      const killModeLabel=hge.killMode==="KILL_MAX"?"🔴KILL_MAX ":hge.killMode==="KILL"?"🟡KILL ":"";
       const zoneLabel=dayDD>=CAUTION_PCT?"⚠CAUTION ":"";
       const posLabel=numPos>=2?"🔥×2 ":"🔥 ";
       const phaseLabel=`P${phase}`;
@@ -2915,7 +3114,7 @@ function App(){
       const hmrLabel=hmrActive?"🚧HMR ":"";
       const regimeLabel=hge.regime==="expansion"?"⚡EXP ":"";
       const sesLabel=sesBoost>1.2?"🔥LON/NY ":sesBoost<0.9?"🌙ASIA ":"";
-      setStatus(`${posLabel}${zoneLabel}${hmrLabel}${regimeLabel}${sesLabel}⚡ ${sig.dir} @ ${sig.entry} · SL:${finalSig.sl} · TP1:${finalSig.tp1} · risk $${riskDollars.toFixed(2)} (${Math.round(riskPct*100)}%) · ×${compositeMult.toFixed(2)} · ${phaseLabel} ${streakLabel} · ${sig.strength}%`);
+      setStatus(`${posLabel}${killModeLabel}${zoneLabel}${hmrLabel}${regimeLabel}${sesLabel}⚡ ${sig.dir} @ ${sig.entry} · SL:${finalSig.sl} · TP1:${finalSig.tp1} · risk $${riskDollars.toFixed(2)} (${Math.round(riskPct*100)}%) · ×${compositeMult.toFixed(2)} · ${phaseLabel} ${streakLabel} · ${sig.strength}%`);
 
       if(numPos>=2){
         const t2={...finalSig, sl:finalSig.sl, slD:finalSig.slD, lots, pnl:0,
@@ -3372,7 +3571,13 @@ function App(){
               const tp1_2=+snapTP(dir2==="BUY"?entry2+slD2*1.5:entry2-slD2*1.5,dir2).toFixed(2);
               const tp2_2=+snapTP(dir2==="BUY"?entry2+slD2*3.0:entry2-slD2*3.0,dir2).toFixed(2);
               const tp3_2=+(dir2==="BUY"?entry2+slD2*6.0:entry2-slD2*6.0).toFixed(2);
-              const rawLots2=getLotSize(rBalance.current,"BALANCED",slD2);
+              const {lots:rawLots2}=calcHFTLots({
+                balance:rBalance.current,dayStartBal:rDayStart.current,
+                startBalance:rStartBal.current,strength:60,score:votes2,slD:slD2,
+                inst:rInstrument.current,streak:rStreak.current,livePrice:price,
+                hourGMT:hour2,seteRegime:t.seteRegime||null,
+                mktState:rMktState.current||"NORMAL",
+              });
               const lots2=+Math.min(Math.max(rawLots2,MIN_LOT),MAX_LOT_NORMAL).toFixed(4);
               rTrade2.current={
                 dir:dir2,entry:entry2,sl:sl2,tp1:tp1_2,tp2:tp2_2,tp3:tp3_2,
@@ -3445,6 +3650,8 @@ function App(){
               startBalance:rStartBal.current,strength:sig_tick.strength,
               score:sig_tick.score,slD:realSL_t.slD,inst:rInstrument.current,
               streak:rStreak.current,livePrice:price,hourGMT:hour_tick,
+              seteRegime:sig_tick.seteRegime||null,
+              mktState:mState_tick||"NORMAL",
             });
             const lots_t=+Math.min(Math.max(rawL_t,MIN_LOT),MAX_LOT_NORMAL).toFixed(4);
             const t_tick={...sig_tick,
@@ -3778,15 +3985,26 @@ function App(){
             <span style={{fontSize:"9px",fontFamily:"'JetBrains Mono',monospace",flex:1,
               overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",
               color:phase==="SCANNING"?GREEN:MUTED}}>
-              {/* Show clean scan status — strip result text and emojis */}
               {(()=>{
                 const raw=status||"";
-                // If status is just a result echo ("⏳ Scanning — last: ..."), show short version
                 const scanIdx=raw.indexOf("Scanning");
                 const clean=scanIdx>=0?raw.slice(scanIdx):raw;
-                return clean.replace(/[🔥⚡✅❌🏆🛑📡💡⚠📰🎯⏳]/gu,"").replace(/\s{2,}/g," ").trim()||"Scanning...";
+                return clean.replace(/[🔥⚡✅❌🏆🛑📡💡⚠📰🎯⏳🔴🟡]/gu,"").replace(/\s{2,}/g," ").trim()||"Scanning...";
               })()}
             </span>
+            {/* HGEv5 Kill Mode chip */}
+            {(()=>{
+              const km=typeof _hgeKillMode!=="undefined"?_hgeKillMode:"BASE";
+              const kmC=km==="KILL_MAX"?"#f03858":km==="KILL"?"#f5c830":"#38bdf8";
+              const kmBg=km==="KILL_MAX"?"#f0385818":km==="KILL"?"#f5c83018":"#38bdf808";
+              return running?(
+                <span style={{fontSize:"7.5px",fontFamily:"'JetBrains Mono',monospace",fontWeight:"700",
+                  padding:"1px 5px",borderRadius:"3px",border:`1px solid ${kmC}50`,
+                  color:kmC,background:kmBg,flexShrink:0,letterSpacing:".5px"}}>
+                  {km==="KILL_MAX"?"🔴K_MAX":km==="KILL"?"🟡KILL":"◦BASE"}
+                </span>
+              ):null;
+            })()}
             {!lastResult&&<SpreadPill spread={liveSpread} inst={instrument}/>}
             {!lastResult&&lastSignalVotes&&<VoteBar buyVotes={lastSignalVotes.buy} sellVotes={lastSignalVotes.sell}/>}
             {!lastResult&&lastMTFBias!==0&&<MTFBadge bias={lastMTFBias}/>}
@@ -3932,7 +4150,7 @@ function App(){
               </div>
             ))}
             <div style={{padding:"10px 12px",background:"#0d0d0f",borderRadius:"6px",fontSize:"9px",color:DIM,lineHeight:"1.7",border:`1px solid ${BORDER}`}}>
-              💡 Trailing activates at 50% of entry→TP1 distance: SL snaps to Breakeven, then follows price as trail = entry + 40%×(price−entry). BE fires at 50% profit milestone. WebSocket feeds trail every tick. Low/Medium news traded actively. High impact = blackout. <span style={{color:GOLD}}>🎯 Sniper RR 1:3→1:5</span> · <span style={{color:BLUE}}>📊 Scalp RR 1:1→1:2</span>.
+              💡 Risk: $2.50–$3.00 per trade (dollar-target model, not %). SL = confirmed structure swing + 0.55×ATR sweep buffer + 3× spread, session-scaled, $3.00 hard floor. Trail activates at 50% of entry→TP1: SL snaps to BE, then follows at entry+40%×move. BE fires at 50% milestone. <span style={{color:GOLD}}>🎯 RR 1:3→1:5+</span>
             </div>
           </div>
         )}
